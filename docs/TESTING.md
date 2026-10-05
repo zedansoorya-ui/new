@@ -22,9 +22,19 @@ transcript text unless *verbose diagnostics* is switched on.
    creates a local certificate and asks for your password once.
 
 **Without building:** every CI run uploads an ad-hoc-signed `Murmur-ci-adhoc.zip` artifact
-(under the run's Summary on GitHub). It works for a quick look, but:
-- After unzipping, right-click ▸ Open the app the first time.
+(under the run's Summary on GitHub, while signed in). It works for a quick look, but:
+- macOS blocks it the first time, because it isn't notarised. Since macOS 15, right-click ▸ Open
+  no longer gets past this. After the first attempt, go to System Settings ▸ Privacy & Security
+  and click **Open Anyway**. Alternatively, clear the download flag in Terminal:
+  `xattr -dr com.apple.quarantine /Applications/Murmur.app`.
 - macOS forgets its permissions whenever you install a newer one.
+
+**Troubleshooting**
+
+| Symptom | Cause and fix |
+|---|---|
+| `open -a Murmur` says it can't find the app | It isn't installed yet. `make install` copies it to Applications and prints `Installed /Applications/Murmur.app.` when done. If it stopped earlier, the usual cause is a missing signing identity: run `scripts/setup-signing.sh --self-signed`, then `make install` again. |
+| `make install` fails with "Permission denied" | Your account can't write to `/Applications`, which happens on managed Macs. Report it; the installer can use `~/Applications` instead. |
 
 ## Milestone 2: Fn → Parakeet → clipboard
 
