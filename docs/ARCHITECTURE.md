@@ -84,23 +84,27 @@ we build and *in what order*.
 ## 4. Repository layout
 
 ```
-Package.swift                 App package: swift-tools 6.2 (Xcode 26+), platforms macOS 14.2
+Package.swift                 App package: swift-tools 6.0, platforms macOS 14.2. Builds with
+                              Xcode 16.4+ today; Milestone 4 needs Xcode 26 (Foundation Models)
 Packages/MurmurCore/          Zero-dependency Swift package (Foundation only)
   Sources/MurmurCore/
-    Hotkey/                   HotkeyStateMachine, HotkeyEvent, HotkeyEffect, Timing
-    Dictation/                DictationMachine (stage timeouts, watchdog), LatencyTracker
+    Hotkey/                   HotkeyTrigger + ModifierGate, HotkeyStateMachine, GlobeKeyAction
+    Audio/                    LevelMeter, AudioSamples
+    Transcription/            TranscriptionEngine protocol, TranscriptionResult
+    Text/                     TranscriptTidy (basic spacing fixes until cleanup lands)
+    Dictation/                DictationTimeline; later DictationMachine (stage timeouts)
     Chunking/                 ChunkPolicy, VadFrame, TranscriptAssembler, CleanupBatcher
     Cleanup/                  RuleBasedCleanup, SpokenCommands, FillerFilter, CleanupGuard,
                               PromptBuilder, StyleResolver, AppProfile
     Dictionary/               DictionaryMatcher (Jaro-Winkler), Replacements
     Meetings/                 TranscriptMerger, EchoDeduper, Template (+ rendering), MapReducePlanner
-    Eval/                     TextNormalizer, WER, EditDistance, Percentiles
+    Eval/                     ScoringNormalizer, WordErrorRate, EditDistance, Percentiles,
+                              EvalManifest + EvalReport
   Tests/MurmurCoreTests/
 Sources/MurmurApp/
   App/                        AppDelegate, StatusItem, AppEnvironment (dependency wiring)
   Hotkey/                     HotkeyTap (CGEventTap adapter), GlobeKeySetting, FlagResync
   Audio/                      MicCapture, AudioSpool, OutputMuter, DeviceList
-  ASR/                        ParakeetEngine, ModelStore, VadAdapter, VocabularyBoost, ITN
   Cleanup/                    AppleFMCleanup, CleanupPipeline, PromptFiles
   Context/                    FrontmostApp, FocusedElement (AX), ContextSnapshot
   Output/                     Clipboard, Paster (layout-aware ⌘V), SelectionReader
@@ -110,7 +114,9 @@ Sources/MurmurApp/
                               CalendarMonitor, Exporter
   Storage/                    Database (GRDB), migrations, repositories, Keychain
   Onboarding/  Settings/  History/  Diagnostics/
-Sources/murmur-eval/          Eval CLI (record, run, longform)
+Sources/MurmurEngines/        The only target that imports FluidAudio; shared by the app and the
+                              eval CLI. ParakeetEngine now; VadAdapter, VocabularyBoost, ITN later
+Sources/murmur-eval/          Eval CLI (v0: run, transcribe; later record, longform)
 Resources/
   Info.plist, Murmur.entitlements, AppIcon
   Prompts/cleanup.md, command.md, meeting-map.md, meeting-reduce.md, meeting-chat.md
@@ -475,8 +481,8 @@ Keychain only.
   (`security find-identity -p codesigning`). If there is none, it creates a self-signed
   code-signing certificate, "Murmur Local Signing", in the login keychain. The chosen identity
   goes into `.signing-identity` (gitignored).
-- **`scripts/build-app.sh [--unsigned]`.** Steps:
-  1. `swift build -c release --arch arm64`;
+- **`scripts/build-app.sh [--unsigned] [--skip-build] [--debug]`.** Steps:
+  1. `swift build -c release --product Murmur`;
   2. assemble `build/Murmur.app` (executable, Info.plist with usage strings and `LSUIElement`,
      resources, SwiftPM resource bundles);
   3. codesign with the hardened runtime and `com.apple.security.device.audio-input`.
@@ -484,7 +490,8 @@ Keychain only.
   `/Applications/Murmur.app`, and prints "launch from Spotlight". The same identity is used every
   time, so TCC grants survive rebuilds. Ad-hoc signing is refused outside CI, because it resets
   grants.
-- **Makefile targets:** `build`, `test`, `app`, `install`, `eval`, `references`.
+- **Makefile targets:** `build`, `test`, `signing`, `app`, `install`, `eval`, `references`,
+  `clean`.
 
 ---
 
@@ -510,7 +517,7 @@ Keychain only.
 | Layer | How |
 |---|---|
 | MurmurCore logic | `swift test` in `Packages/MurmurCore`, on Linux CI and macOS CI |
-| App compiles and bundles | macOS CI: `swift build -c release` + `scripts/build-app.sh --unsigned` |
+| App compiles and bundles | macOS CI (`macos-15`, newest stable Xcode on the runner): `swift build -c release` for both products, then `scripts/build-app.sh --unsigned`. The ad-hoc-signed app is uploaded as a 7-day artifact. |
 | Hardware behaviour | Owner runs `make install`, then the milestone checklist in `docs/TESTING.md`, and returns "Copy diagnostics" |
 | Quality | `make eval` on the owner's Mac (§16) |
 
@@ -523,12 +530,16 @@ A milestone is reported done only when CI is green on its last commit.
 - **`evals/prompts.md`** lists 36 suggested utterances in seven groups: casual, fast,
   self-corrections, lists, dictionary names, Hinglish (a few, to document Parakeet's limits),
   and code dictation.
-- **`murmur-eval record <id>`** records `evals/audio/<id>.wav` (16 kHz mono; gitignored). The
-  owner then writes `reference` (verbatim) and `expected` (ideal cleaned output) into
-  `evals/manifest.json`; that file stays local until the owner decides to commit it.
+- **Recording.** v0 has no recorder: the owner records clips with QuickTime into
+  `evals/audio/` (gitignored), following `evals/README.md`. A `murmur-eval record <id>`
+  command can come later. The owner writes `reference` (verbatim) and `expected` (ideal
+  cleaned output) into `evals/manifest.json`, which stays local unless the owner decides to
+  commit it.
 - **`murmur-eval run`** (`make eval`) runs each ASR engine and each cleanup engine and writes a
-  Markdown + JSON report to `evals/reports/` with:
-  - WER of the raw ASR against `reference` (normalised casing, punctuation and number forms);
+  Markdown + JSON report to `evals/reports/`. v0 (Milestone 2) runs one ASR engine per run,
+  chosen with `--model`, and reports WER and transcription latency only. The full report has:
+  - WER of the raw ASR against `reference` (casing and punctuation normalised; number forms
+    from v1, via ITN);
   - normalised edit distance of the final text against `expected`;
   - guard rejections;
   - p50/p95 latency per stage and per engine.

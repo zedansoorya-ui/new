@@ -1,0 +1,26 @@
+{
+  "clips": [
+    {
+      "id": "001",
+      "audio": "audio/001.m4a",
+      "category": "casual",
+      "reference": "hey are you free later I was thinking we could grab coffee around 4",
+      "expected": "Hey, are you free later? I was thinking we could grab coffee around 4.",
+      "app": "com.apple.MobileSMS"
+    },
+    {
+      "id": "002",
+      "audio": "audio/002.m4a",
+      "category": "self-correction",
+      "reference": "let's meet at 3 no wait 4 in the library",
+      "expected": "Let's meet at 4 in the library."
+    },
+    {
+      "id": "003",
+      "audio": "audio/003.m4a",
+      "category": "list",
+      "reference": "for the trip I need to pack um a charger my passport and two notebooks",
+      "expected": "For the trip I need to pack:\n- a charger\n- my passport\n- two notebooks"
+    }
+  ]
+}

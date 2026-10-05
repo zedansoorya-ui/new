@@ -6,10 +6,9 @@ Murmur builds on the open-source projects below. This file has two parts:
 2. **Adapted code**: projects whose source we adapt, with their full licence texts.
 
 Each source file adapted from one of these projects starts with a header naming the project, the
-original path, the commit and the licence. As of Milestone 1, **no third-party code has been
-copied into this repository yet**. Entries under "Adapted code" are pre-approved sources (see
-`docs/ARCHITECTURE.md`, decision D3). The files that use them will be listed under each entry as
-they land.
+original path, the commit and the licence. Entries under "Adapted code" are the pre-approved
+sources (see `docs/ARCHITECTURE.md`, decision D3). Each entry lists the Murmur files that use it;
+Milestone 2 added the first ones, from Muesli and PushText.
 
 Never used as a source: VoiceInk (GPL-3.0), dictator (no licence), and anything under anarlog's
 `enterprise/` directory (commercial licence).
@@ -22,12 +21,20 @@ Never used as a source: VoiceInk (GPL-3.0), dictator (no licence), and anything 
 
 - Project: https://github.com/FluidInference/FluidAudio
 - Licence: Apache License 2.0 (https://www.apache.org/licenses/LICENSE-2.0)
-- Use: Swift package dependency, pinned to an exact version (added in Milestone 2). It provides
-  ASR, VAD, diarization, ITN and echo cancellation.
+- Use: Swift package dependency, pinned to exactly 0.17.5 in `Package.swift` (since Milestone 2).
+  It provides ASR now, and VAD, diarization, ITN and echo cancellation in later milestones.
+- FluidAudio statically links components under their own permissive licences. They are listed
+  in its [`ThirdPartyLicenses/`](https://github.com/FluidInference/FluidAudio/tree/v0.17.5/ThirdPartyLicenses)
+  directory:
+  - fastcluster (BSD-2-Clause);
+  - the `NemoTextProcessing` engine: text-processing-rs and NVIDIA NeMo Text Processing
+    (Apache-2.0), and rustfst and flate2 (MIT or Apache-2.0);
+  - VBx clustering (Apache-2.0);
+  - text-to-speech frontend data that Murmur does not call.
 - Models downloaded at runtime carry their own licences. Parakeet models are derived from
   NVIDIA checkpoints under CC-BY-4.0; Sortformer is under the NVIDIA Open Model License;
-  LocalVQE is under Apache-2.0; Silero VAD is under MIT. These are attributed in the app's About
-  window.
+  LocalVQE is under Apache-2.0; Silero VAD is under MIT.
+- To do before any public release: ship these licence texts in the app's About window.
 
 Further dependencies (for example GRDB.swift, MIT) are added here when they enter
 `Package.swift`.
@@ -42,7 +49,14 @@ Further dependencies (for example GRDB.swift, MIT) are added here when they ente
 - Planned use: audio capture, system-audio tap, paste and clipboard handling, dictionary
   matching, meeting detection, transcript merging, onboarding. Mapping in `docs/ARCHITECTURE.md`
   §17.
-- Files in Murmur: none yet.
+- Files in Murmur:
+  - `Sources/MurmurApp/Audio/MicCapture.swift`, adapted from
+    `native/MuesliNative/Sources/MuesliNativeApp/StreamingMicRecorder.swift`.
+  - `Sources/MurmurEngines/ParakeetEngine.swift`, adapted from `.../FluidAudioBackend.swift`.
+  - `Sources/MurmurApp/Overlay/PillView.swift`: visual design only, after
+    `.../FloatingIndicatorController.swift` and `.../IndicatorWaveformDynamics.swift`.
+  - `Packages/MurmurCore/Sources/MurmurCore/Hotkey/HotkeyStateMachine.swift`: semantics only,
+    after `.../HotkeyMonitor.swift`. The code is written for Murmur.
 
 ```
 MIT License
@@ -72,8 +86,18 @@ SOFTWARE.
 
 - Project: https://github.com/EvanCNavarro/PushText (commit `adf166086f871533115d94afdef4099cbcde9836`)
 - Planned use: event-tap hotkey monitor, dictation state machine with watchdog, cleanup drift
-  guard.
-- Files in Murmur: none yet.
+  guard (Milestone 4).
+- Files in Murmur:
+  - `Packages/MurmurCore/Sources/MurmurCore/Hotkey/HotkeyTrigger.swift`, adapted from
+    `Sources/PushTextCore/ModifierGate.swift`.
+  - `Packages/MurmurCore/Sources/MurmurCore/Hotkey/GlobeKeyAction.swift`, adapted from
+    `Sources/PushTextCore/GlobeKeyConflict.swift`.
+  - `Sources/MurmurApp/Hotkey/HotkeyTap.swift`, adapted from
+    `Sources/PushTextKit/CGEventTapHotkeyMonitor.swift`.
+  - `Sources/MurmurApp/Hotkey/GlobeKeySetting.swift`, adapted from
+    `Sources/PushTextKit/GlobeKeySetting.swift`.
+  - `Packages/MurmurCore/Sources/MurmurCore/Hotkey/HotkeyStateMachine.swift`: semantics only,
+    after `Sources/PushTextCore/DictationState.swift`.
 
 ```
 MIT License
