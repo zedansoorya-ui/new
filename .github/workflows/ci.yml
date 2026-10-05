@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  core-linux:
+    name: MurmurCore tests (Linux)
+    runs-on: ubuntu-24.04
+    container: swift:6.2
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - name: Toolchain
+        run: swift --version
+      - name: Test
+        run: swift test --package-path Packages/MurmurCore
+
+  app-macos:
+    name: Build app (macOS)
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Select newest stable Xcode
+        id: xcode
+        run: |
+          newest=$(python3 - <<'EOF'
+          import glob, re
+          apps = [p for p in glob.glob('/Applications/Xcode_*.app')
+                  if re.fullmatch(r'/Applications/Xcode_\d+(\.\d+)*\.app', p)]
+          version = lambda p: tuple(int(x) for x in re.findall(r'\d+', p.rsplit('_', 1)[1]))
+          print(max(apps, key=version) if apps else '')
+          EOF
+          )
+          if [ -n "$newest" ]; then sudo xcode-select -s "$newest"; fi
+          xcodebuild -version
+          swift --version
+          echo "version=$(xcodebuild -version | tr -s ' \n' '-')" >> "$GITHUB_OUTPUT"
+      - name: Cache SwiftPM build
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build
+            Packages/MurmurStorage/.build
+          key: spm-${{ runner.os }}-${{ steps.xcode.outputs.version }}-${{ hashFiles('Package.swift', 'Package.resolved', 'Packages/MurmurCore/Package.swift', 'Packages/MurmurStorage/Package.swift') }}
+          restore-keys: spm-${{ runner.os }}-${{ steps.xcode.outputs.version }}-
+      - name: MurmurCore tests
+        run: swift test --package-path Packages/MurmurCore
+      - name: MurmurStorage tests
+        run: swift test --package-path Packages/MurmurStorage
+      - name: Build Murmur and murmur-eval
+        run: |
+          swift build -c release --product Murmur
+          swift build -c release --product murmur-eval
+          cat Package.resolved
+      - name: Assemble app bundle (ad-hoc signed)
+        run: scripts/build-app.sh --unsigned --skip-build
+      - name: Show linked libraries
+        run: |
+          otool -L build/Murmur.app/Contents/MacOS/Murmur
+          otool -l build/Murmur.app/Contents/MacOS/Murmur | grep -A2 LC_RPATH || true
+          ls -la build/Murmur.app/Contents build/Murmur.app/Contents/Resources
+      - name: Zip app bundle
+        run: ditto -c -k --keepParent build/Murmur.app build/Murmur-ci-adhoc.zip
+      - name: Upload app bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: Murmur-ci-adhoc
+          path: build/Murmur-ci-adhoc.zip
+          retention-days: 7

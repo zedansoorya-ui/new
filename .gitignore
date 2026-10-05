@@ -1,0 +1,22 @@
+# Reference clones (scripts/fetch-references.sh)
+/references/
+
+# Eval recordings and reports stay local: this repository is public
+/evals/audio/
+/evals/reports/
+/evals/manifest.json
+
+# Local signing choice (scripts/setup-signing.sh)
+/.signing-identity
+
+# Build output
+.build/
+/build/
+/dist/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+.swiftpm/xcode/
+
+# macOS
+.DS_Store
