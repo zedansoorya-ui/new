@@ -1,10 +1,10 @@
 // Adapted from Muesli (https://github.com/Muesli-HQ/muesli),
 // native/MuesliNative/Sources/MuesliNativeApp/StreamingMicRecorder.swift at 906df1c.
 // MIT License, Copyright (c) 2026 Pranav Hari.
-// Changes: reduced to push-to-talk capture (no file rotation, pause or device-change recovery yet);
+// Changes: reduced to push-to-talk capture (no file rotation or device-change recovery yet);
 // keeps 16 kHz Float32 samples in memory for one-shot transcription and spools the same samples to
 // disk as raw Float32 so a crash loses nothing; reuses one converter per capture so resampler state
-// carries across buffers.
+// carries across buffers; pause stops the engine and resume restarts it into the same capture.
 
 import AVFoundation
 import Foundation
@@ -47,6 +47,8 @@ final class MicCapture: @unchecked Sendable {
     private let control = DispatchQueue(label: "com.zedan.murmur.mic")
     private let engine = AVAudioEngine()
     private let lock = NSLock()
+    /// Touched only on `control`.
+    private var tapInstalled = false
 
     // Guarded by `lock`; touched by the tap thread.
     private var converter: AVAudioConverter?
@@ -56,6 +58,7 @@ final class MicCapture: @unchecked Sendable {
     private var spoolURL: URL?
     private var droppedBuffers = 0
     private var isRunning = false
+    private var isPaused = false
     private var onLevel: (@Sendable (Float) -> Void)?
     private var onFirstAudio: (@Sendable () -> Void)?
 
@@ -83,14 +86,39 @@ final class MicCapture: @unchecked Sendable {
     }
 
     /// Keeps recording for `tail` seconds (so the end of the last word is not cut off), then stops
-    /// and returns everything captured.
+    /// and returns everything captured. No tail while paused: nothing is being recorded.
     func stop(tail: TimeInterval) async -> Captured {
-        if tail > 0 {
+        if tail > 0, !lock.synchronized({ isPaused }) {
             try? await Task.sleep(nanoseconds: UInt64(tail * 1_000_000_000))
         }
         return await withCheckedContinuation { (continuation: CheckedContinuation<Captured, Never>) in
             control.async {
                 continuation.resume(returning: self.stopOnControlQueue(keepSpool: true))
+            }
+        }
+    }
+
+    /// Stops listening without ending the capture. The microphone is released, so macOS's
+    /// recording indicator goes out while paused.
+    func pause() async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            control.async {
+                self.pauseOnControlQueue()
+                continuation.resume()
+            }
+        }
+    }
+
+    /// Starts listening again; new audio is appended to the same capture.
+    func resume() async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            control.async {
+                do {
+                    try self.resumeOnControlQueue()
+                    continuation.resume()
+                } catch {
+                    continuation.resume(throwing: error)
+                }
             }
         }
     }
@@ -153,26 +181,77 @@ final class MicCapture: @unchecked Sendable {
             self.isRunning = true
         }
 
-        input.installTap(onBus: 0, bufferSize: Self.tapBufferSize, format: nil) { [weak self] buffer, _ in
-            self?.process(buffer)
-        }
+        installTap(on: input)
         engine.prepare()
         do {
             try engine.start()
         } catch {
-            input.removeTap(onBus: 0)
+            removeTapIfInstalled()
             _ = clearState(keepSpool: false)
             throw CaptureError.engineStartFailed(error.localizedDescription)
         }
         Log.audio.info("mic started: \(hardwareFormat.sampleRate, privacy: .public) Hz, \(hardwareFormat.channelCount, privacy: .public) ch")
     }
 
+    private func pauseOnControlQueue() {
+        guard lock.synchronized({ isRunning && !isPaused }) else { return }
+        removeTapIfInstalled()
+        if engine.isRunning {
+            engine.stop()
+        }
+        lock.synchronized { isPaused = true }
+        Log.audio.info("mic paused")
+    }
+
+    private func resumeOnControlQueue() throws {
+        guard lock.synchronized({ isRunning && isPaused }) else { return }
+        // The input device may have changed while paused (AirPods connected, say), so build a
+        // converter for whatever the input delivers now. Output stays 16 kHz mono.
+        let input = engine.inputNode
+        let hardwareFormat = input.outputFormat(forBus: 0)
+        guard hardwareFormat.sampleRate > 0, hardwareFormat.channelCount > 0 else {
+            throw CaptureError.noInputDevice
+        }
+        guard let target = lock.synchronized({ targetFormat }),
+              let converter = AVAudioConverter(from: hardwareFormat, to: target) else {
+            throw CaptureError.unsupportedFormat
+        }
+        lock.synchronized {
+            self.converter = converter
+            self.isPaused = false
+        }
+        installTap(on: input)
+        engine.prepare()
+        do {
+            try engine.start()
+        } catch {
+            removeTapIfInstalled()
+            lock.synchronized { isPaused = true }
+            throw CaptureError.engineStartFailed(error.localizedDescription)
+        }
+        Log.audio.info("mic resumed: \(hardwareFormat.sampleRate, privacy: .public) Hz")
+    }
+
     private func stopOnControlQueue(keepSpool: Bool) -> Captured {
-        engine.inputNode.removeTap(onBus: 0)
+        removeTapIfInstalled()
         if engine.isRunning {
             engine.stop()
         }
         return clearState(keepSpool: keepSpool)
+    }
+
+    private func installTap(on input: AVAudioInputNode) {
+        removeTapIfInstalled()
+        input.installTap(onBus: 0, bufferSize: Self.tapBufferSize, format: nil) { [weak self] buffer, _ in
+            self?.process(buffer)
+        }
+        tapInstalled = true
+    }
+
+    private func removeTapIfInstalled() {
+        guard tapInstalled else { return }
+        engine.inputNode.removeTap(onBus: 0)
+        tapInstalled = false
     }
 
     private func clearState(keepSpool: Bool) -> Captured {
@@ -186,6 +265,7 @@ final class MicCapture: @unchecked Sendable {
             onLevel = nil
             onFirstAudio = nil
             isRunning = false
+            isPaused = false
             return result
         }
         try? handle?.close()
@@ -199,7 +279,7 @@ final class MicCapture: @unchecked Sendable {
 
     private func process(_ buffer: AVAudioPCMBuffer) {
         lock.lock()
-        guard isRunning, let converter, let targetFormat, buffer.frameLength > 0 else {
+        guard isRunning, !isPaused, let converter, let targetFormat, buffer.frameLength > 0 else {
             lock.unlock()
             return
         }

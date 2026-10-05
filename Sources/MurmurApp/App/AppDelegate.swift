@@ -5,6 +5,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var environment: AppEnvironment?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        MainMenu.install()
         let environment = AppEnvironment()
         self.environment = environment
         environment.start()

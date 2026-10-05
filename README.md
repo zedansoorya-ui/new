@@ -20,6 +20,11 @@ subscription and no telemetry.
 Hold Fn (or Right Option / Right Command), speak and release. Parakeet transcribes on the
 Neural Engine and the text goes to the clipboard. Double-tap for hands-free; Esc cancels.
 
+Also in this build:
+- A **History** window with every dictation, the app it was for, and search. It is stored on
+  this Mac only.
+- **Hover controls** on the pill: Dictate, History, Pause/Resume, Done and Cancel.
+
 There is no cleanup, auto-paste or meeting recording yet. See the milestones in
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) §18.
 

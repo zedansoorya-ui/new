@@ -2,7 +2,8 @@
 import PackageDescription
 
 // Murmur's app package. Pure logic lives in Packages/MurmurCore (no dependencies, also tested on
-// Linux); speech engines in MurmurEngines; the menu-bar app and the eval CLI on top.
+// Linux); the dictation history in Packages/MurmurStorage (GRDB); speech engines in MurmurEngines;
+// the menu-bar app and the eval CLI on top.
 //
 // Build the app bundle with scripts/build-app.sh (or `make app`), not `swift run`: macOS grants
 // permissions to signed app bundles, not to a bare executable started from a terminal.
@@ -17,6 +18,7 @@ let package = Package(
     ],
     dependencies: [
         .package(path: "Packages/MurmurCore"),
+        .package(path: "Packages/MurmurStorage"),
         .package(url: "https://github.com/FluidInference/FluidAudio.git", exact: "0.17.5"),
     ],
     targets: [
@@ -33,6 +35,7 @@ let package = Package(
             dependencies: [
                 "MurmurEngines",
                 .product(name: "MurmurCore", package: "MurmurCore"),
+                .product(name: "MurmurStorage", package: "MurmurStorage"),
             ],
             path: "Sources/MurmurApp"
         ),

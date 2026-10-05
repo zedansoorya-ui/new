@@ -46,6 +46,7 @@ we build and *in what order*.
 | D12 | ASR = Parakeet via FluidAudio pinned to an exact version. Ultra vs Unified decided by evals. | Accuracy and latency on the ANE |
 | D13 | Clipboard restore off by default | Keeps "always copy" true |
 | D14 | "Pause media" implemented as "mute other audio while dictating" | Pausing needs fragile private API |
+| D15 | Dictation history window, pill hover controls and pause/resume pulled forward from Milestone 6 into 2.1. History keeps text and metadata, not audio. | Owner's request; audio retention is a separate privacy and disk decision |
 
 ---
 
@@ -86,6 +87,8 @@ we build and *in what order*.
 ```
 Package.swift                 App package: swift-tools 6.0, platforms macOS 14.2. Builds with
                               Xcode 16.4+ today; Milestone 4 needs Xcode 26 (Foundation Models)
+Packages/MurmurStorage/       GRDB-backed history database (HistoryStore, DictationEntry); tests run on
+                              macOS CI
 Packages/MurmurCore/          Zero-dependency Swift package (Foundation only)
   Sources/MurmurCore/
     Hotkey/                   HotkeyTrigger + ModifierGate, HotkeyStateMachine, GlobeKeyAction
@@ -112,8 +115,8 @@ Sources/MurmurApp/
   Meetings/                   MeetingController, SystemAudioTap, SCKFallback, Watchdog, Echo,
                               Diarization, NotesComposer, MeetingChat, MeetingDetector,
                               CalendarMonitor, Exporter
-  Storage/                    Database (GRDB), migrations, repositories, Keychain
-  Onboarding/  Settings/  History/  Diagnostics/
+  History/                    HistoryWindowController, HistoryModel, HistoryView
+  Onboarding/  Settings/  Diagnostics/
 Sources/MurmurEngines/        The only target that imports FluidAudio; shared by the app and the
                               eval CLI. ParakeetEngine now; VadAdapter, VocabularyBoost, ITN later
 Sources/murmur-eval/          Eval CLI (v0: run, transcribe; later record, longform)
@@ -348,13 +351,22 @@ reason.
   Spaces and floats over full-screen apps (`.canJoinAllSpaces`, `.fullScreenAuxiliary`, level
   `.statusBar`). It must never take focus from the text field.
 - **States:**
-  - **idle:** subtle; can auto-hide.
+  - **idle:** a small bar.
   - **recording:** live waveform from mic RMS plus an elapsed timer.
+  - **paused:** orange pause symbol, "Paused", timer stopped; the microphone is released, so
+    macOS's recording indicator goes out.
   - **processing:** spinner.
-  - **done:** "✓ Copied" / "✓ Pasted" for about 1 s.
-  - **error:** click for details.
-- **Interactions.** Click the idle pill to start or stop hands-free mode. Right-click opens a
-  menu: switch profile, the last 5 dictations, start a meeting.
+  - **done:** "✓ Copied" / "✓ Pasted" for about 1 s, held while the pointer is over it.
+  - **error:** short message.
+- **Hover controls** (since 2.1). Hovering expands the pill into labelled buttons, because
+  macOS shows no tooltips for an inactive app:
+  - idle: **Dictate** (hands-free) and **History**;
+  - recording or paused: **Pause/Resume**, **Done** and **Cancel**;
+  - done: **History**.
+  Hover uses an `.activeAlways` tracking area, and the hosting view accepts the first click,
+  because Murmur is never the active app while you dictate.
+- **Right-click** opens a menu: dictation controls, the last 5 dictations, History, Setup.
+  Profiles and meetings join it later.
 - **Position.** Screen edge, bottom-centre, or near the notch. Visuals are adapted from Muesli's
   indicator and waveform dynamics.
 
@@ -439,7 +451,7 @@ Ported from Muesli:
 
 | Table | Key columns |
 |---|---|
-| `dictation` | id, created_at, app_bundle_id, app_name, raw_text, cleaned_text, final_text, asr_engine, cleanup_engine, style, guard_verdict, duration_ms, latency_json |
+| `dictation` | **v1 (2.1):** id (UUID blob), createdAt, text, mode, engine, audioSeconds, appName, appBundleID, wordCount, timeline (JSON). Cleanup columns (raw/cleaned text, cleanup engine, style, guard verdict) arrive with Milestone 4. |
 | `dictation_fts` | FTS5 over raw/final text |
 | `dictionary_term` | id, kind (vocabulary / replacement), term, aliases_json, replacement, threshold |
 | `app_profile` | bundle_id (PK), style, cleanup_enabled, auto_paste, asr_engine |
@@ -449,9 +461,12 @@ Ported from Muesli:
 | `speaker_name` | meeting_id, label, display_name |
 | `template` | id, name, json, is_builtin |
 
-Database: `~/Library/Application Support/Murmur/murmur.sqlite` (WAL), with schema changes through
-`DatabaseMigrator`. Preferences live in `UserDefaults`. Secrets, if any are ever needed, go in
-Keychain only.
+Database: `~/Library/Application Support/Murmur/history.sqlite`, opened with a GRDB
+`DatabaseQueue` (`Packages/MurmurStorage`, GRDB 7.11.1 pinned exactly), with schema changes through
+`DatabaseMigrator`. History search uses an escaped `LIKE` for now; FTS5 tables come with meeting
+search in Milestone 5. Writes happen off the main thread. The **Save new dictations** switch in
+the History window turns saving off; **Clear…** deletes everything. Preferences live in
+`UserDefaults`. Secrets, if any are ever needed, go in Keychain only.
 
 ---
 
@@ -597,10 +612,11 @@ Each milestone ends with a stop and a demo.
 |---|---|---|
 | 1 | `docs/REFERENCE_NOTES.md`, this document, `THIRD_PARTY_NOTICES.md`, `scripts/fetch-references.sh`, `.gitignore`, README | Reviewed and approved |
 | 2 | Core and app packages, `HotkeyStateMachine` + tests, event tap, mic → spool, Parakeet, clipboard, pill, menu bar, Mic/Accessibility/Globe onboarding, signing + install, CI, logging + Copy diagnostics, eval CLI v0 | Hold Fn, say a sentence, release: correct text on the clipboard in < 1 s |
+| 2.1 | Added at the owner's request: History window (search, copy, delete, clear, save switch) backed by GRDB; pill hover controls (Dictate, History, Pause/Resume, Done, Cancel); pause/resume | Dictations appear in History with their app; hover controls work without stealing focus |
 | 3 | VAD chunking, incremental transcription, crash recovery, mic picker, mute-while-dictating, long-form test mode | 20-minute dictation: < 1.5 s after release, flat memory |
 | 4 | Rule-based + FM cleanup, guard, editable prompt, styles + profiles, dictionary UI + CTC boosting, auto-paste + restore, command mode, `docs/LANGUAGES.md`, eval v1 | `make eval` on 30+ clips; Fn+Ctrl rewrite works |
 | 5 | Meetings end to end (§10) | A real Zoom/Meet call gives a "Me"/"Speaker N" transcript and notes |
-| 6 | Onboarding with live checks, history UI, settings, model manager, launch at login, sounds, pill position, fallback hotkeys, README | Clean install passes `docs/TESTING.md` |
+| 6 | Onboarding with live checks, history polish (re-run cleanup, export), settings, model manager, launch at login, sounds, pill position, fallback hotkeys, README | Clean install passes `docs/TESTING.md` |
 
 ---
 

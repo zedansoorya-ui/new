@@ -1,6 +1,7 @@
 import AppKit
 import MurmurCore
 import MurmurEngines
+import MurmurStorage
 
 /// The menu-bar icon and its menu. Also builds the pill's right-click menu.
 @MainActor
@@ -30,8 +31,9 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         let menu = NSMenu()
         menu.autoenablesItems = false
         guard let environment else { return menu }
-        menu.addItem(makeItem(environment.dictation.isCapturing ? "Stop Dictation" : "Start Hands-free Dictation", #selector(toggleHandsFree)))
+        addDictationControls(to: menu, environment: environment)
         addRecentDictations(to: menu, environment: environment)
+        menu.addItem(makeItem("History…", #selector(showHistory)))
         menu.addItem(.separator())
         menu.addItem(makeItem("Setup…", #selector(showSetup)))
         return menu
@@ -46,11 +48,12 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         menu.addItem(header)
         menu.addItem(.separator())
 
-        menu.addItem(makeItem(environment.dictation.isCapturing ? "Stop Dictation" : "Start Hands-free Dictation", #selector(toggleHandsFree)))
+        addDictationControls(to: menu, environment: environment)
         let copyLast = makeItem("Copy Last Dictation", #selector(copyLast))
-        copyLast.isEnabled = environment.dictation.history.last != nil
+        copyLast.isEnabled = environment.dictation.recent.last != nil
         menu.addItem(copyLast)
         addRecentDictations(to: menu, environment: environment)
+        menu.addItem(makeItem("History…", #selector(showHistory), key: "y"))
         menu.addItem(.separator())
 
         let hotkeyMenu = NSMenu()
@@ -89,8 +92,20 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         menu.addItem(makeItem("Quit Murmur", #selector(quit), key: "q"))
     }
 
+    /// Start when idle; Pause/Resume, Done and Cancel while capturing.
+    private func addDictationControls(to menu: NSMenu, environment: AppEnvironment) {
+        let dictation = environment.dictation
+        guard dictation.isCapturing else {
+            menu.addItem(makeItem("Start Hands-free Dictation", #selector(toggleHandsFree)))
+            return
+        }
+        menu.addItem(makeItem(dictation.isPaused ? "Resume Dictation" : "Pause Dictation", #selector(togglePause)))
+        menu.addItem(makeItem("Finish Dictation", #selector(stopDictation)))
+        menu.addItem(makeItem("Cancel Dictation", #selector(cancelDictation)))
+    }
+
     private func addRecentDictations(to menu: NSMenu, environment: AppEnvironment) {
-        let recent = environment.dictation.history.suffix(5).reversed()
+        let recent = environment.dictation.recent.suffix(5).reversed()
         guard !recent.isEmpty else { return }
         let recentMenu = NSMenu()
         recentMenu.autoenablesItems = false
@@ -126,8 +141,24 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         environment?.dictation.toggleHandsFree()
     }
 
+    @objc private func togglePause() {
+        environment?.dictation.togglePause()
+    }
+
+    @objc private func stopDictation() {
+        environment?.dictation.stop()
+    }
+
+    @objc private func cancelDictation() {
+        environment?.dictation.cancel()
+    }
+
+    @objc private func showHistory() {
+        environment?.history.show()
+    }
+
     @objc private func copyLast() {
-        guard let text = environment?.dictation.history.last?.text else { return }
+        guard let text = environment?.dictation.recent.last?.text else { return }
         Clipboard.copy(text)
     }
 

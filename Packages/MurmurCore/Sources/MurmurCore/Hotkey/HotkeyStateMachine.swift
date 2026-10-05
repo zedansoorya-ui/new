@@ -23,6 +23,8 @@ public enum DiscardReason: String, Sendable, Equatable {
     case chord
     /// The user pressed Escape.
     case escape
+    /// The user clicked Cancel on the pill.
+    case cancelled
 }
 
 /// What the app should do in response to an input.
@@ -67,6 +69,10 @@ public enum HotkeyInput: Sendable, Equatable {
     case otherKeyDown
     case escape
     case pillClick
+    /// The pill's Done button: finish the current capture, whatever its mode.
+    case stop
+    /// The pill's Cancel button: throw the current capture away.
+    case cancel
     /// A scheduled check; see `nextDeadline(now:)`.
     case tick
     /// A live reading of whether the trigger is physically down, used to recover from a release
@@ -109,7 +115,8 @@ public struct HotkeyTiming: Sendable, Equatable {
 /// | holding | triggerUp | idle | finish(.hold) |
 /// | tapWindow | triggerDown ≤ doubleTapWindow | handsFree | beginCapture(.handsFree) |
 /// | handsFree | triggerDown | idle | finish(.handsFree) |
-/// | any capturing | escape | idle | discard(.escape) |
+/// | any capturing | stop | idle | finish(mode) |
+/// | any capturing | escape / cancel | idle | discard(.escape / .cancelled) |
 public struct HotkeyStateMachine: Sendable {
     public enum State: Sendable, Equatable {
         case idle
@@ -145,13 +152,15 @@ public struct HotkeyStateMachine: Sendable {
     }
 
     public mutating func handle(_ input: HotkeyInput, at now: TimeInterval) -> [HotkeyEffect] {
-        if input == .escape {
-            if isCapturing {
-                reset()
-                return [.discard(.escape)]
-            }
+        switch input {
+        case .escape, .cancel:
+            let wasCapturing = isCapturing
             reset()
-            return []
+            return wasCapturing ? [.discard(input == .escape ? .escape : .cancelled)] : []
+        case .stop:
+            return stopCapture()
+        default:
+            break
         }
 
         switch state {
@@ -182,7 +191,7 @@ public struct HotkeyStateMachine: Sendable {
             case .triggerFlag(let isDown):
                 noteTriggerFlag(isDown, at: now)
                 return []
-            case .triggerDown, .pillClick, .escape:
+            case .triggerDown, .pillClick, .escape, .stop, .cancel:
                 return []
             }
 
@@ -202,7 +211,7 @@ public struct HotkeyStateMachine: Sendable {
                 return finishIfReleaseWasMissed(at: now, mode: .hold)
             case .tick:
                 return finishIfReleaseWasMissed(at: now, mode: .hold)
-            case .triggerDown, .pillClick, .escape:
+            case .triggerDown, .pillClick, .escape, .stop, .cancel:
                 return []
             }
 
@@ -222,7 +231,7 @@ public struct HotkeyStateMachine: Sendable {
                 return finishIfReleaseWasMissed(at: now, mode: .command)
             case .tick:
                 return finishIfReleaseWasMissed(at: now, mode: .command)
-            case .triggerDown, .controlDown, .pillClick, .escape:
+            case .triggerDown, .controlDown, .pillClick, .escape, .stop, .cancel:
                 return []
             }
 
@@ -248,7 +257,7 @@ public struct HotkeyStateMachine: Sendable {
             case .pillClick:
                 state = .handsFree(since: now, awaitingLatchRelease: false)
                 return [.beginCapture(.handsFree)]
-            case .triggerUp, .controlDown, .otherKeyDown, .triggerFlag, .escape:
+            case .triggerUp, .controlDown, .otherKeyDown, .triggerFlag, .escape, .stop, .cancel:
                 return []
             }
 
@@ -266,7 +275,7 @@ public struct HotkeyStateMachine: Sendable {
             case .pillClick:
                 reset()
                 return [.finish(.handsFree)]
-            case .controlDown, .otherKeyDown, .tick, .triggerFlag, .escape:
+            case .controlDown, .otherKeyDown, .tick, .triggerFlag, .escape, .stop, .cancel:
                 // Typing while hands-free does not cancel; only Escape or the trigger ends it.
                 return []
             }
@@ -307,9 +316,30 @@ public struct HotkeyStateMachine: Sendable {
         case .pillClick:
             state = .handsFree(since: now, awaitingLatchRelease: false)
             return [.beginCapture(.handsFree)]
-        case .triggerUp, .controlDown, .otherKeyDown, .escape, .tick, .triggerFlag:
+        case .triggerUp, .controlDown, .otherKeyDown, .escape, .tick, .triggerFlag, .stop, .cancel:
             return []
         }
+    }
+
+    /// Ends the current capture from outside the keyboard. A trigger release that arrives later
+    /// lands in `.idle` and is ignored.
+    private mutating func stopCapture() -> [HotkeyEffect] {
+        let effects: [HotkeyEffect]
+        switch state {
+        case .pending:
+            // Done before the tap threshold still means the user wants the text.
+            effects = [.commitHold, .finish(.hold)]
+        case .holding:
+            effects = [.finish(.hold)]
+        case .command:
+            effects = [.finish(.command)]
+        case .handsFree:
+            effects = [.finish(.handsFree)]
+        case .idle, .tapWindow:
+            effects = []
+        }
+        reset()
+        return effects
     }
 
     private mutating func noteTriggerFlag(_ isDown: Bool, at now: TimeInterval) {

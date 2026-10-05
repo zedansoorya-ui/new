@@ -6,12 +6,15 @@ struct AppPaths: Sendable {
     /// Raw audio of in-progress dictations, kept until the text is delivered so a crash loses
     /// nothing. Deleted after each successful dictation.
     let spool: URL
+    /// Dictation history (SQLite). Text only; never leaves the Mac.
+    let database: URL
 
     init(fileManager: FileManager = .default) {
         let base = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support")
         root = base.appendingPathComponent("Murmur", isDirectory: true)
         spool = root.appendingPathComponent("Spool", isDirectory: true)
+        database = root.appendingPathComponent("history.sqlite")
     }
 
     func ensureDirectories() {

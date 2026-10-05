@@ -1,6 +1,7 @@
 import AppKit
 import MurmurCore
 import MurmurEngines
+import MurmurStorage
 import OSLog
 
 /// "Copy Diagnostics": everything needed to debug a report from the user's Mac, without
@@ -35,10 +36,17 @@ enum Diagnostics {
         lines.append("Settings: \(settings)")
         lines.append("")
 
-        let records = environment.dictation.history.suffix(20)
-        lines.append("Recent dictations, newest last (\(records.count)):")
+        let savedCount = (try? environment.historyStore?.count()).map { String($0) } ?? "unavailable"
+        lines.append("History: \(savedCount) saved · saving new: \(environment.settings.saveHistory ? "on" : "off")")
+        // This session only: entries loaded from the database at launch would muddle the latencies.
+        let records = environment.dictation.recent.filter { $0.createdAt >= environment.launchedAt }.suffix(20)
+        lines.append("Recent dictations this session, newest last (\(records.count)):")
         for record in records {
-            var line = "- \(record.timeline.summary())"
+            let summary = record.timeline?.summary() ?? "\(record.mode.rawValue) · \(record.engine)"
+            var line = "- \(summary)"
+            if let app = record.appName {
+                line += " · \(app)"
+            }
             if environment.settings.verboseDiagnostics {
                 line += " — \"\(record.text)\""
             }

@@ -1,16 +1,22 @@
 import AppKit
 import MurmurCore
 import MurmurEngines
+import MurmurStorage
 
 /// Builds and wires the app's long-lived objects. Lives as long as the app.
 @MainActor
 final class AppEnvironment {
     let settings: Settings
     let paths: AppPaths
+    /// When this run of Murmur started.
+    let launchedAt = Date()
     let engine: ParakeetEngine
     let pill: PillController
     let dictation: DictationController
     let onboarding: OnboardingWindowController
+    let history: HistoryWindowController
+    /// Nil if the database could not be opened; dictation still works, history is not saved.
+    let historyStore: HistoryStore?
     private let statusItem: StatusItemController
     private let mic: MicCapture
 
@@ -24,8 +30,23 @@ final class AppEnvironment {
         let engine = ParakeetEngine(model: settings.asrModel)
         let mic = MicCapture()
         let pill = PillController()
-        let dictation = DictationController(mic: mic, engine: engine, pill: pill, paths: paths, settings: settings)
+        let historyStore: HistoryStore?
+        do {
+            historyStore = try HistoryStore(url: paths.database)
+        } catch {
+            historyStore = nil
+            Log.app.error("history database unavailable: \(error.localizedDescription, privacy: .public)")
+        }
+        let dictation = DictationController(
+            mic: mic,
+            engine: engine,
+            pill: pill,
+            paths: paths,
+            settings: settings,
+            historyStore: historyStore
+        )
         let onboardingModel = OnboardingModel(trigger: settings.trigger, takeOverGlobeKey: settings.takeOverGlobeKey)
+        let historyModel = HistoryModel(store: historyStore, saveHistory: settings.saveHistory)
 
         self.settings = settings
         self.paths = paths
@@ -34,6 +55,8 @@ final class AppEnvironment {
         self.pill = pill
         self.dictation = dictation
         self.onboarding = OnboardingWindowController(model: onboardingModel)
+        self.history = HistoryWindowController(model: historyModel)
+        self.historyStore = historyStore
         self.statusItem = StatusItemController()
     }
 
@@ -46,8 +69,19 @@ final class AppEnvironment {
         }
 
         dictation.modelState = { [unowned self] in self.modelState }
-        pill.onClick = { [unowned self] in self.dictation.toggleHandsFree() }
+        dictation.onHistoryChanged = { [unowned self] in self.history.refreshIfVisible() }
+        pill.onStartDictation = { [unowned self] in self.dictation.toggleHandsFree() }
+        pill.onTogglePause = { [unowned self] in self.dictation.togglePause() }
+        pill.onStop = { [unowned self] in self.dictation.stop() }
+        pill.onCancel = { [unowned self] in self.dictation.cancel() }
+        pill.onOpenHistory = { [unowned self] in self.history.show() }
         pill.menuProvider = { [unowned self] in self.statusItem.makePillMenu() }
+        history.model.onSaveHistoryChange = { [unowned self] value in
+            self.settings.saveHistory = value
+            Log.app.info("save history: \(value, privacy: .public)")
+        }
+        history.model.onEntryDeleted = { [unowned self] id in self.dictation.forget(id: id) }
+        history.model.onHistoryCleared = { [unowned self] in self.dictation.forgetAll() }
         onboarding.model.onTakeOverGlobeKeyChange = { [unowned self] value in self.setTakeOverGlobeKey(value) }
         onboarding.model.onRetryModel = { [unowned self] in self.loadModel() }
         onboarding.model.onDone = { [unowned self] in

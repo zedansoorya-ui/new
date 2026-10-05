@@ -233,6 +233,48 @@ final class HotkeyStateMachineTests: XCTestCase {
         XCTAssertFalse(machine.isCapturing)
     }
 
+    // MARK: - Pill buttons
+
+    func testStopFinishesWhateverIsCapturing() {
+        _ = send(.triggerDown(held: []), at: 0)
+        _ = send(.tick, at: 0.2)
+        XCTAssertEqual(send(.stop, at: 1), [.finish(.hold)])
+        XCTAssertEqual(machine.state, .idle)
+
+        _ = send(.pillClick, at: 2)
+        XCTAssertEqual(send(.stop, at: 3), [.finish(.handsFree)])
+
+        _ = send(.triggerDown(held: [.control]), at: 4)
+        XCTAssertEqual(send(.stop, at: 5), [.finish(.command)])
+        XCTAssertEqual(machine.state, .idle)
+    }
+
+    func testStopDuringPendingStillDelivers() {
+        _ = send(.triggerDown(held: []), at: 0)
+        XCTAssertEqual(send(.stop, at: 0.05), [.commitHold, .finish(.hold)])
+        XCTAssertFalse(machine.isCapturing)
+    }
+
+    func testStopWhenIdleDoesNothing() {
+        XCTAssertEqual(send(.stop, at: 0), [])
+        XCTAssertEqual(machine.state, .idle)
+    }
+
+    func testTriggerReleaseAfterStopIsIgnored() {
+        _ = send(.triggerDown(held: []), at: 0)
+        _ = send(.tick, at: 0.2)
+        _ = send(.stop, at: 1)
+        XCTAssertEqual(send(.triggerUp, at: 1.5), [])
+        XCTAssertEqual(machine.state, .idle)
+    }
+
+    func testCancelDiscardsWithItsOwnReason() {
+        _ = send(.pillClick, at: 0)
+        XCTAssertEqual(send(.cancel, at: 1), [.discard(.cancelled)])
+        XCTAssertEqual(machine.state, .idle)
+        XCTAssertEqual(send(.cancel, at: 2), [])
+    }
+
     func testCustomTiming() {
         machine = HotkeyStateMachine(timing: HotkeyTiming(tapThreshold: 0.3, doubleTapWindow: 0.5))
         _ = send(.triggerDown(held: []), at: 0)

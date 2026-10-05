@@ -66,10 +66,10 @@ Tick each one, or describe what happened instead.
 | 4 | In a text editor, press **Fn+←** and **Fn+→** | The cursor jumps to line start/end as usual; no dictation |
 | 5 | Double-tap **Fn**, let go, speak for ~10 s, tap **Fn** once | Recording continues after release (pill says *Hands-free*); the final tap transcribes |
 | 6 | Hold **Fn**, speak, press **Esc** | *Cancelled*; nothing copied; the Esc does not reach the app you're in |
-| 7 | Click the small idle pill, speak, click it again | Same as hands-free |
+| 7 | Hover over the small idle pill, click **Dictate**, speak, then hover and click **Done** | Same as hands-free |
 | 8 | Type in TextEdit, dictate with Fn, keep typing | The TextEdit cursor never loses focus; the pill never takes it |
 | 9 | Make Safari full screen and dictate; switch to another Space and dictate | The pill is visible in both |
-| 10 | Right-click the pill | Menu with *Start Hands-free Dictation* and your recent dictations |
+| 10 | Right-click the pill | Menu with *Start Hands-free Dictation*, your recent dictations and *History…* |
 | 11 | Menu bar ▸ Hotkey ▸ Right Option, then hold Right Option and dictate | Works the same as Fn |
 | 12 | Dictate for about a minute in hands-free mode | Text arrives (slower than short clips for now; Milestone 3 fixes long-form latency) |
 
@@ -85,3 +85,25 @@ Tick each one, or describe what happened instead.
 - **Fn+Ctrl** (command mode) currently just dictates. The rewrite behaviour arrives in
   Milestone 4.
 - **Changing the speech model** in the menu takes effect after relaunching Murmur.
+
+## Milestone 2.1: history, hover controls, pause
+
+`git pull && make install`, then relaunch Murmur from Spotlight.
+
+| # | Do this | Expected |
+|---|---|---|
+| H1 | Hover over the small idle pill | It grows into two buttons: **Dictate** and **History**. Your cursor stays in the app you were typing in. |
+| H2 | Click **Dictate**, speak, hover again | The recording pill shows **Pause**, **Done** and **Cancel** next to the timer |
+| H3 | Click **Pause** | Orange pause symbol and "Paused"; the timer stops; the orange mic dot in the menu bar goes out |
+| H4 | Click **Resume**, say a second sentence, click **Done** | Both sentences (before and after the pause) are copied |
+| H5 | Start again and click **Cancel** | "Cancelled"; nothing copied |
+| H6 | Hover over "✓ Copied" right after a dictation | It stays up while you hover and offers **History** |
+| H7 | Menu bar ▸ History… (or the pill's **History** button) | A window lists your dictations under Today, with the time, the app you dictated into, and the length |
+| H8 | Type a word into the search field | Only dictations containing it remain; ⌘V pastes into the field |
+| H9 | Select a dictation; click **Copy**; right-click another ▸ Delete | Copy puts the full text on the clipboard; the deleted one disappears, also from menu bar ▸ Recent Dictations |
+| H10 | Quit Murmur, relaunch, open History | Everything is still there |
+| H11 | Switch off **Save new dictations**, dictate, check History | The new dictation is copied but not added. Switch it back on afterwards. |
+| H12 | **Clear…** ▸ Delete All | The list empties |
+
+History is stored only on this Mac, in `~/Library/Application Support/Murmur/history.sqlite`. It
+keeps the text and details like the app and length, never audio.

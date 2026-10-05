@@ -49,15 +49,20 @@ jobs:
       - name: Cache SwiftPM build
         uses: actions/cache@v4
         with:
-          path: .build
-          key: spm-${{ runner.os }}-${{ steps.xcode.outputs.version }}-${{ hashFiles('Package.swift', 'Package.resolved', 'Packages/MurmurCore/Package.swift') }}
+          path: |
+            .build
+            Packages/MurmurStorage/.build
+          key: spm-${{ runner.os }}-${{ steps.xcode.outputs.version }}-${{ hashFiles('Package.swift', 'Package.resolved', 'Packages/MurmurCore/Package.swift', 'Packages/MurmurStorage/Package.swift') }}
           restore-keys: spm-${{ runner.os }}-${{ steps.xcode.outputs.version }}-
       - name: MurmurCore tests
         run: swift test --package-path Packages/MurmurCore
+      - name: MurmurStorage tests
+        run: swift test --package-path Packages/MurmurStorage
       - name: Build Murmur and murmur-eval
         run: |
           swift build -c release --product Murmur
           swift build -c release --product murmur-eval
+          cat Package.resolved
       - name: Assemble app bundle (ad-hoc signed)
         run: scripts/build-app.sh --unsigned --skip-build
       - name: Show linked libraries

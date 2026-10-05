@@ -1,7 +1,7 @@
 .PHONY: help build test app install signing eval references clean
 
 help:
-	@echo "make test        run MurmurCore unit tests"
+	@echo "make test        run the MurmurCore and MurmurStorage unit tests"
 	@echo "make build       build the app and eval CLI (release)"
 	@echo "make signing     choose a stable code-signing identity (once)"
 	@echo "make app         build and sign build/Murmur.app"
@@ -15,6 +15,7 @@ build:
 
 test:
 	swift test --package-path Packages/MurmurCore
+	swift test --package-path Packages/MurmurStorage
 
 app:
 	scripts/build-app.sh
@@ -32,4 +33,4 @@ references:
 	scripts/fetch-references.sh
 
 clean:
-	rm -rf .build build Packages/MurmurCore/.build
+	rm -rf .build build Packages/MurmurCore/.build Packages/MurmurStorage/.build

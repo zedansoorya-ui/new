@@ -13,6 +13,7 @@ final class Settings {
         static let releaseTailMilliseconds = "releaseTailMilliseconds"
         static let hasCompletedOnboarding = "hasCompletedOnboarding"
         static let verboseDiagnostics = "verboseDiagnostics"
+        static let saveHistory = "saveHistory"
     }
 
     private let defaults: UserDefaults
@@ -52,6 +53,12 @@ final class Settings {
         set { defaults.set(newValue, forKey: Key.hasCompletedOnboarding) }
     }
 
+    /// Keep every dictation in the History window (on this Mac only). On unless switched off.
+    var saveHistory: Bool {
+        get { defaults.object(forKey: Key.saveHistory) as? Bool ?? true }
+        set { defaults.set(newValue, forKey: Key.saveHistory) }
+    }
+
     /// Include transcript text in diagnostics. Off by default.
     var verboseDiagnostics: Bool {
         get { defaults.bool(forKey: Key.verboseDiagnostics) }
@@ -66,6 +73,7 @@ final class Settings {
             "asrModel": asrModel.rawValue,
             "releaseTailMs": String(Int(releaseTail * 1000)),
             "verboseDiagnostics": String(verboseDiagnostics),
+            "saveHistory": String(saveHistory),
         ]
     }
 }

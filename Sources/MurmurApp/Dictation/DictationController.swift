@@ -2,56 +2,77 @@ import AppKit
 import CoreGraphics
 import MurmurCore
 import MurmurEngines
+import MurmurStorage
 
-/// One delivered dictation. The text stays in memory for "Copy last dictation"; persistent,
-/// searchable history arrives with the database in a later milestone.
-struct DictationRecord: Sendable {
-    let id: UUID
-    let date: Date
-    let text: String
-    let timeline: DictationTimeline
-}
-
-/// Runs the push-to-talk loop: hotkey events → state machine → capture → Parakeet → clipboard.
+/// Runs the push-to-talk loop: hotkey events → state machine → capture → Parakeet → clipboard, then
+/// saves the result to the history.
 @MainActor
 final class DictationController {
     /// Set once the event tap exists, so Escape is swallowed only while capturing.
     var tap: HotkeyTap?
     /// Current speech-model state, provided by the environment.
     var modelState: () -> ParakeetEngine.LoadState = { .notLoaded }
-    /// Called after a dictation is added to history.
+    /// Called after a dictation is delivered and saved, or the history changed otherwise.
     var onHistoryChanged: (() -> Void)?
 
-    private(set) var history: [DictationRecord] = []
+    /// Most recent dictations, newest last: this session's, plus the latest saved ones at launch.
+    /// Feeds the menus; the History window reads the database.
+    private(set) var recent: [DictationEntry] = []
 
     private let mic: MicCapture
     private let engine: ParakeetEngine
     private let pill: PillController
     private let paths: AppPaths
     private let settings: Settings
+    private let historyStore: HistoryStore?
     private var machine = HotkeyStateMachine()
     private var session: Session?
     private var tickWorkItem: DispatchWorkItem?
+    /// Pause and resume requests, chained so they reach the microphone in order.
+    private var micCommands: Task<Void, Never>?
 
     private struct Session {
         let id: UUID
         var mode: CaptureMode
         var timeline: DictationTimeline
         let startTask: Task<Void, Error>
+        /// When the press happened, for the pill's timer and the history.
+        let startedAt: Date
+        /// The app that had focus when the capture started.
+        let appName: String?
+        let appBundleID: String?
         /// True once the pill shows the recording state (after the tap threshold for holds).
         var committed: Bool
+        /// Set while paused.
+        var pausedAt: Date?
+        var pausedTotal: TimeInterval = 0
     }
 
-    init(mic: MicCapture, engine: ParakeetEngine, pill: PillController, paths: AppPaths, settings: Settings) {
+    init(
+        mic: MicCapture,
+        engine: ParakeetEngine,
+        pill: PillController,
+        paths: AppPaths,
+        settings: Settings,
+        historyStore: HistoryStore?
+    ) {
         self.mic = mic
         self.engine = engine
         self.pill = pill
         self.paths = paths
         self.settings = settings
+        self.historyStore = historyStore
+        if let saved = try? historyStore?.recent(limit: 20) {
+            recent = saved.reversed()
+        }
     }
 
     var isCapturing: Bool {
         machine.isCapturing
+    }
+
+    var isPaused: Bool {
+        session?.pausedAt != nil
     }
 
     // MARK: - Inputs
@@ -73,9 +94,65 @@ final class DictationController {
         process(input, at: Self.now())
     }
 
-    /// Clicking the pill, or "Start/Stop Hands-free Dictation" in the menu.
+    /// The pill's Dictate button, or "Start Hands-free Dictation" in the menu.
     func toggleHandsFree() {
         process(.pillClick, at: Self.now())
+    }
+
+    /// The pill's Done button: transcribe what has been captured so far.
+    func stop() {
+        process(.stop, at: Self.now())
+    }
+
+    /// The pill's Cancel button: throw the capture away.
+    func cancel() {
+        process(.cancel, at: Self.now())
+    }
+
+    /// Pauses or resumes the current capture. While paused the microphone is released and the
+    /// timer stops; finishing transcribes everything captured before the pause.
+    func togglePause() {
+        guard var current = session, current.committed else { return }
+        let mic = self.mic
+        let startTask = current.startTask
+        let id = current.id
+
+        if let pausedAt = current.pausedAt {
+            current.pausedTotal += Date().timeIntervalSince(pausedAt)
+            current.pausedAt = nil
+            session = current
+            showRecording(current)
+            Log.audio.info("dictation resumed")
+            enqueueMicCommand {
+                do {
+                    try await mic.resume()
+                } catch {
+                    await MainActor.run {
+                        guard self.session?.id == id else { return }
+                        Log.audio.error("resume failed: \(error.localizedDescription, privacy: .public)")
+                        // Keep what was captured before the pause rather than lose it.
+                        self.stop()
+                    }
+                }
+            }
+        } else {
+            current.pausedAt = Date()
+            session = current
+            showRecording(current)
+            Log.audio.info("dictation paused")
+            enqueueMicCommand {
+                _ = try? await startTask.value
+                await mic.pause()
+            }
+        }
+    }
+
+    private func enqueueMicCommand(_ command: @escaping @Sendable () async -> Void) {
+        let previous = micCommands
+        micCommands = Task {
+            await previous?.value
+            await command()
+        }
     }
 
     private func process(_ input: HotkeyInput, at now: TimeInterval) {
@@ -97,7 +174,7 @@ final class DictationController {
             current.timeline.mode = mode
             session = current
             if current.committed {
-                pill.setPhase(.recording(since: Self.date(forUptime: current.timeline.pressedAt), label: Self.label(for: mode)))
+                showRecording(current)
             }
         case .finish:
             finish(at: now)
@@ -182,11 +259,17 @@ final class DictationController {
                 }
             )
         }
+        // The pill never takes focus, so the frontmost app is still the one being dictated into.
+        let frontmost = NSWorkspace.shared.frontmostApplication
+        let isSelf = frontmost?.bundleIdentifier == Bundle.main.bundleIdentifier
         session = Session(
             id: id,
             mode: mode,
             timeline: DictationTimeline(mode: mode, engine: engine.identifier, pressedAt: now),
             startTask: startTask,
+            startedAt: Self.date(forUptime: now),
+            appName: isSelf ? nil : frontmost?.localizedName,
+            appBundleID: isSelf ? nil : frontmost?.bundleIdentifier,
             committed: false
         )
         tap?.setCaptureActive(true)
@@ -213,7 +296,16 @@ final class DictationController {
         guard var current = session, !current.committed else { return }
         current.committed = true
         session = current
-        pill.setPhase(.recording(since: Self.date(forUptime: current.timeline.pressedAt), label: Self.label(for: current.mode)))
+        showRecording(current)
+    }
+
+    private func showRecording(_ current: Session) {
+        pill.setPhase(.recording(PillModel.Recording(
+            startedAt: current.startedAt,
+            label: Self.label(for: current.mode),
+            pausedAt: current.pausedAt,
+            pausedTotal: current.pausedTotal
+        )))
     }
 
     private func finish(at now: TimeInterval) {
@@ -227,16 +319,19 @@ final class DictationController {
         let engine = self.engine
         let tail = settings.releaseTail
         let startTask = current.startTask
-        let initialTimeline = current.timeline
+        let pendingCommands = micCommands
+        let finished = current
 
         Task {
-            var timeline = initialTimeline
+            var timeline = finished.timeline
             do {
                 try await startTask.value
             } catch {
                 // The start failure was already reported.
                 return
             }
+            // A pause or resume still on its way to the microphone lands before the stop.
+            await pendingCommands?.value
 
             let captured = await mic.stop(tail: tail)
             timeline.audioReadyAt = Self.now()
@@ -264,11 +359,20 @@ final class DictationController {
                 Clipboard.copy(text)
                 timeline.deliveredAt = Self.now()
                 MicCapture.deleteSpool(captured.spoolURL)
-                self.record(text: text, timeline: timeline)
                 let summary = timeline.summary()
                 let characters = text.count
                 Log.output.info("delivered \(characters, privacy: .public) chars: \(summary, privacy: .public)")
                 Log.output.debug("text: \(text, privacy: .private)")
+                self.record(DictationEntry(
+                    createdAt: finished.startedAt,
+                    text: text,
+                    mode: finished.mode,
+                    engine: engine.identifier,
+                    audioSeconds: timeline.audioSeconds,
+                    appName: finished.appName,
+                    appBundleID: finished.appBundleID,
+                    timeline: timeline
+                ))
                 self.complete(.done("Copied"))
             } catch {
                 // The spool file is kept so the audio can be recovered.
@@ -284,7 +388,7 @@ final class DictationController {
         tap?.setCaptureActive(false)
         cancelSession(current)
         switch reason {
-        case .escape:
+        case .escape, .cancelled:
             pill.flash(.error("Cancelled"), for: 0.8)
         case .tap, .chord:
             if current.committed {
@@ -297,8 +401,10 @@ final class DictationController {
     private func cancelSession(_ session: Session) {
         let mic = self.mic
         let startTask = session.startTask
+        let pendingCommands = micCommands
         Task {
             _ = try? await startTask.value
+            await pendingCommands?.value
             await mic.cancel()
         }
     }
@@ -317,12 +423,33 @@ final class DictationController {
         session = current
     }
 
-    private func record(text: String, timeline: DictationTimeline) {
-        history.append(DictationRecord(id: UUID(), date: Date(), text: text, timeline: timeline))
-        if history.count > 50 {
-            history.removeFirst(history.count - 50)
+    /// Adds a delivered dictation to the menus right away and to the database in the background.
+    private func record(_ entry: DictationEntry) {
+        recent.append(entry)
+        if recent.count > 50 {
+            recent.removeFirst(recent.count - 50)
         }
         onHistoryChanged?()
+
+        guard settings.saveHistory, let store = historyStore else { return }
+        Task.detached(priority: .utility) {
+            do {
+                try store.add(entry)
+            } catch {
+                Log.app.error("could not save dictation to history: \(error.localizedDescription, privacy: .public)")
+            }
+            await MainActor.run { [weak self] in self?.onHistoryChanged?() }
+        }
+    }
+
+    /// Forgets a dictation deleted in the History window, so the menus stop offering it.
+    func forget(id: UUID) {
+        recent.removeAll { $0.id == id }
+    }
+
+    /// Forgets everything after the history was cleared.
+    func forgetAll() {
+        recent.removeAll()
     }
 
     /// Shows the outcome unless a new recording has already started.
